@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Link } from "react-router-dom"
 import VerifiedIcon from "@mui/icons-material/Verified"
@@ -14,8 +14,10 @@ import { useDelegations, useUnbondings } from "data/queries/staking"
 import { getCalcUptime, getCalcVotingPowerRate } from "data/Terra/TerraAPI"
 import { useTerraValidators } from "data/Terra/TerraAPI"
 import { Page, Card, Table, Flex, Grid } from "components/layout"
+import { TooltipIcon } from "components/display"
 import { Read } from "components/token"
 import WithSearchInput from "pages/custom/WithSearchInput"
+import Toggle from "./components/Toggle"
 import ProfileIcon from "./components/ProfileIcon"
 import Uptime from "./components/Uptime"
 import { ValidatorJailed } from "./components/ValidatorTag"
@@ -50,28 +52,25 @@ const Validators = () => {
       .map((validator) => {
         const { operator_address } = validator
 
-        const TerraValidator = TerraValidators.find(
+        const indexOfTerraValidator = TerraValidators.findIndex(
           (validator) => validator.operator_address === operator_address
         )
 
+        const TerraValidator = TerraValidators[indexOfTerraValidator]
+
+        const rank = indexOfTerraValidator + 1
         const voting_power_rate = calcRate(operator_address)
         const uptime = calcUptime(TerraValidator)
 
         return {
           ...TerraValidator,
           ...validator,
+          rank,
           voting_power_rate,
           uptime,
         }
       })
-      .sort(
-        (a, b) =>
-          Number(b.rewards_30d) - Number(a.rewards_30d) ||
-          Number(b.uptime) - Number(a.uptime) ||
-          Number(a.commission.commission_rates.rate) -
-            Number(b.commission.commission_rates.rate) ||
-          Number(b.voting_power_rate) - Number(a.voting_power_rate)
-      )
+      .sort(({ rank: a }, { rank: b }) => a - b)
   }, [TerraValidators, oracleParams, validators])
 
   const renderCount = () => {
@@ -80,140 +79,169 @@ const Validators = () => {
     return t("{{count}} active validators", { count })
   }
 
+  const [recommended, setRecommended] = useState(true)
   const render = (keyword: string) => {
     if (!activeValidators) return null
 
     return (
-      <Table
-        dataSource={activeValidators}
-        filter={({ description: { moniker }, operator_address }) => {
-          if (!keyword) return true
-          if (moniker.toLowerCase().includes(keyword.toLowerCase())) return true
-          if (operator_address === keyword) return true
-          return false
-        }}
-        sorter={(a, b) => Number(a.jailed) - Number(b.jailed)}
-        initialSorterKey="rewards"
-        rowKey={({ operator_address }) => operator_address}
-        columns={[
-          {
-            title: t("Moniker"),
-            dataIndex: ["description", "moniker"],
-            defaultSortOrder: "asc",
-            sorter: ({ description: a }, { description: b }) =>
-              a.moniker.localeCompare(b.moniker),
-            render: (moniker, validator) => {
-              const { operator_address, jailed } = validator
-              const { contact } = validator
+      <>
+        <section>
+          <TooltipIcon
+            content={
+              <article>
+                <p>This sorts validators accordingly to</p>
+                <ul>
+                  <li>Uptime (3 months): 40%</li>
+                  <li>Rewards: 30%</li>
+                  <li>Governance participation rate: 30%</li>
+                </ul>
+              </article>
+            }
+          >
+            <Toggle
+              checked={recommended}
+              onChange={() => setRecommended(!recommended)}
+            >
+              {t("Recommended")}
+            </Toggle>
+          </TooltipIcon>
+        </section>
 
-              const delegated = delegations?.find(
-                ({ validator_address }) =>
-                  validator_address === operator_address
-              )
+        <Table
+          key={Number(recommended)}
+          onSort={() => setRecommended(false)}
+          initialSorterKey={recommended ? undefined : "rewards"}
+          dataSource={activeValidators}
+          filter={({ description: { moniker }, operator_address }) => {
+            if (!keyword) return true
+            if (moniker.toLowerCase().includes(keyword.toLowerCase()))
+              return true
+            if (operator_address === keyword) return true
+            return false
+          }}
+          sorter={(a, b) => Number(a.jailed) - Number(b.jailed)}
+          rowKey={({ operator_address }) => operator_address}
+          columns={[
+            {
+              title: t("Moniker"),
+              dataIndex: ["description", "moniker"],
+              defaultSortOrder: "asc",
+              sorter: ({ description: a }, { description: b }) =>
+                a.moniker.localeCompare(b.moniker),
+              render: (moniker, validator) => {
+                const { operator_address, jailed } = validator
+                const { contact } = validator
 
-              const undelegated = undelegations?.find(
-                ({ validator_address }) =>
-                  validator_address === operator_address
-              )
+                const delegated = delegations?.find(
+                  ({ validator_address }) =>
+                    validator_address === operator_address
+                )
 
-              return (
-                <Flex start gap={8}>
-                  <ProfileIcon src={validator.picture} size={22} />
+                const undelegated = undelegations?.find(
+                  ({ validator_address }) =>
+                    validator_address === operator_address
+                )
 
-                  <Grid gap={2}>
-                    <Flex gap={4} start>
-                      <Link
-                        to={`/validator/${operator_address}`}
-                        className={styles.moniker}
-                      >
-                        {moniker}
-                      </Link>
+                return (
+                  <Flex start gap={8}>
+                    <p className="muted">{validator.rank}</p>
+                    <ProfileIcon src={validator.picture} size={22} />
 
-                      {contact?.email && (
-                        <VerifiedIcon
-                          className="info"
-                          style={{ fontSize: 12 }}
-                        />
+                    <Grid gap={2}>
+                      <Flex gap={4} start>
+                        <Link
+                          to={`/validator/${operator_address}`}
+                          className={styles.moniker}
+                        >
+                          {moniker}
+                        </Link>
+
+                        {contact?.email && (
+                          <VerifiedIcon
+                            className="info"
+                            style={{ fontSize: 12 }}
+                          />
+                        )}
+
+                        {jailed && <ValidatorJailed />}
+                      </Flex>
+
+                      {(delegated || undelegated) && (
+                        <p className={styles.muted}>
+                          {[
+                            delegated && t("Delegated"),
+                            undelegated && t("Undelegated"),
+                          ]
+                            .filter(Boolean)
+                            .join(" | ")}
+                        </p>
                       )}
-
-                      {jailed && <ValidatorJailed />}
-                    </Flex>
-
-                    {(delegated || undelegated) && (
-                      <p className={styles.muted}>
-                        {[
-                          delegated && t("Delegated"),
-                          undelegated && t("Undelegated"),
-                        ]
-                          .filter(Boolean)
-                          .join(" | ")}
-                      </p>
-                    )}
-                  </Grid>
-                </Flex>
-              )
+                    </Grid>
+                  </Flex>
+                )
+              },
             },
-          },
-          {
-            title: t("Voting power"),
-            dataIndex: "voting_power_rate",
-            defaultSortOrder: "desc",
-            sorter: (
-              { voting_power_rate: a = 0 },
-              { voting_power_rate: b = 0 }
-            ) => a - b,
-            render: (value = 0) => readPercent(value),
-            align: "right",
-          },
-          {
-            title: t("Commission"),
-            dataIndex: ["commission", "commission_rates"],
-            defaultSortOrder: "asc",
-            sorter: (
-              { commission: { commission_rates: a } },
-              { commission: { commission_rates: b } }
-            ) => a.rate.toNumber() - b.rate.toNumber(),
-            render: ({ rate }: Validator.CommissionRates) =>
-              readPercent(rate.toString(), { fixed: 2 }),
-            align: "right",
-          },
-          {
-            title: t("Uptime"),
-            dataIndex: "uptime",
-            defaultSortOrder: "desc",
-            key: "uptime",
-            sorter: ({ uptime: a = 0 }, { uptime: b = 0 }) => a - b,
-            render: (value) => !!value && <Uptime>{value}</Uptime>,
-            align: "right",
-          },
-          {
-            title: t("Rewards"),
-            tooltip: t("Estimated monthly rewards with 100 Luna staked"),
-            dataIndex: "rewards_30d",
-            defaultSortOrder: "desc",
-            key: "rewards", // initial sorter key
-            sorter: ({ rewards_30d: a = "0" }, { rewards_30d: b = "0" }) =>
-              Number(a) - Number(b),
-            render: (value) =>
-              !!value && (
-                <Read
-                  amount={Number(value) * 100}
-                  denom="uluna"
-                  decimals={0}
-                  fixed={6}
-                />
-              ),
-            align: "right",
-          },
-        ]}
-      />
+            {
+              title: t("Voting power"),
+              dataIndex: "voting_power_rate",
+              defaultSortOrder: "desc",
+              sorter: (
+                { voting_power_rate: a = 0 },
+                { voting_power_rate: b = 0 }
+              ) => a - b,
+              render: (value = 0) => readPercent(value),
+              align: "right",
+            },
+            {
+              title: t("Commission"),
+              dataIndex: ["commission", "commission_rates"],
+              defaultSortOrder: "asc",
+              sorter: (
+                { commission: { commission_rates: a } },
+                { commission: { commission_rates: b } }
+              ) => a.rate.toNumber() - b.rate.toNumber(),
+              render: ({ rate }: Validator.CommissionRates) =>
+                readPercent(rate.toString(), { fixed: 2 }),
+              align: "right",
+            },
+            {
+              title: t("Uptime"),
+              dataIndex: "uptime",
+              defaultSortOrder: "desc",
+              key: "uptime",
+              sorter: ({ uptime: a = 0 }, { uptime: b = 0 }) => a - b,
+              render: (value) => !!value && <Uptime>{value}</Uptime>,
+              align: "right",
+            },
+            {
+              title: t("Rewards"),
+              tooltip: t("Estimated monthly rewards with 100 Luna staked"),
+              dataIndex: "rewards_30d",
+              defaultSortOrder: "desc",
+              key: "rewards",
+              sorter: ({ rewards_30d: a = "0" }, { rewards_30d: b = "0" }) =>
+                Number(a) - Number(b),
+              render: (value) =>
+                !!value && (
+                  <Read
+                    amount={Number(value) * 100}
+                    denom="uluna"
+                    decimals={0}
+                    fixed={6}
+                  />
+                ),
+              align: "right",
+            },
+          ]}
+        />
+      </>
     )
   }
 
   return (
     <Page title={t("Validators")} extra={renderCount()} sub>
       <Card {...state}>
-        <WithSearchInput>{render}</WithSearchInput>
+        <WithSearchInput gap={16}>{render}</WithSearchInput>
       </Card>
     </Page>
   )
